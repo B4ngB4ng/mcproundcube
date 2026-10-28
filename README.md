@@ -12,13 +12,18 @@ Maintained by [Ra's al Ghul](https://alghul.com).
 ## Features
 
 - Streamable HTTP MCP endpoint at `/mcp`
-- OAuth 2.1 Authorization Code flow with mandatory PKCE `S256` and refresh tokens
+- OAuth 2.1 Authorization Code flow with mandatory PKCE `S256`
+- Refresh tokens, so an MCP client renews access until the agent expires instead of pairing again
 - Protected Resource Metadata, authorization-server metadata, and dynamic client registration
 - Scope-based authorization for mail, contacts, and identities
 - Encrypted IMAP credential binding to authorized agents
 - Read, write, and delete operations through a constrained PHP-subset execution environment
+- Replies store the IMAP `\Answered` flag on the original message, so mail clients show it as answered. The original is the message passed as `reply_uid`, or the message found by `In-Reply-To`
+- Forwards store the IMAP `$Forwarded` flag on the original message
+- Forwards include the original attachments on the server, and new messages can carry attachments
 - Two-step, time-limited confirmation for destructive operations
 - Agent revocation from Roundcube settings
+- Works with Grok bot, and has been tested with that client
 
 ## Requirements
 
