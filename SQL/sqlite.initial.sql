@@ -65,3 +65,20 @@ CREATE TABLE mcpcube_oauth_codes (
     expires datetime NOT NULL,
     used smallint NOT NULL DEFAULT 0
 );
+
+CREATE TABLE mcpcube_oauth_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    family_id char(32) NOT NULL,
+    agent_id integer NOT NULL,
+    client_id varchar(80) NOT NULL,
+    access_hash char(64) NOT NULL UNIQUE,
+    refresh_hash char(64) NOT NULL UNIQUE,
+    scope varchar(255) NOT NULL,
+    access_expires datetime NOT NULL,
+    refresh_expires datetime NOT NULL,
+    created datetime NOT NULL,
+    rotated datetime DEFAULT NULL,
+    revoked datetime DEFAULT NULL
+);
+CREATE INDEX mcpcube_oauth_tokens_family_id_idx ON mcpcube_oauth_tokens (family_id);
+CREATE INDEX mcpcube_oauth_tokens_agent_id_idx ON mcpcube_oauth_tokens (agent_id);

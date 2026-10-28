@@ -12,7 +12,7 @@ Maintained by [Ra's al Ghul](https://alghul.com).
 ## Features
 
 - Streamable HTTP MCP endpoint at `/mcp`
-- OAuth 2.1 Authorization Code flow with mandatory PKCE `S256`
+- OAuth 2.1 Authorization Code flow with mandatory PKCE `S256` and refresh tokens
 - Protected Resource Metadata, authorization-server metadata, and dynamic client registration
 - Scope-based authorization for mail, contacts, and identities
 - Encrypted IMAP credential binding to authorized agents

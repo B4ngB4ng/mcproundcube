@@ -94,7 +94,12 @@ final class mcpcube_crypto
      */
     public static function random_bearer_token(): string
     {
-        return 'mcpcube_pat_' . rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
+        return self::random_token('mcpcube_pat_');
+    }
+
+    public static function random_token(string $prefix): string
+    {
+        return $prefix . rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
     }
 
     public static function hash_token(string $token): string

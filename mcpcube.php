@@ -22,7 +22,7 @@ require_once __DIR__ . '/lib/mcpcube_api_identities.php';
  * contacts, and manage identities on the user's behalf.
  *
  * Architecture in one paragraph: an agent pairs via the RFC 8628 Device
- * Authorization Grant (see lib/mcpcube_device_flow.php) to get a 30-day
+ * Authorization Grant (see lib/mcpcube_device_flow.php) to get a 90-day
  * bearer token, tied server-side to an AES-256-GCM-encrypted copy of the
  * user's IMAP password (see lib/mcpcube_crypto.php and
  * lib/mcpcube_auth_context.php). Every MCP call re-authenticates from that
@@ -140,8 +140,7 @@ class mcpcube extends rcube_plugin
 
         $token = mcpcube_auth_context::bearer_token_from_request();
         if ($token === null) {
-            $base = rtrim((string) rcmail::get_instance()->config->get('mcpcube_public_url', ''), '/');
-            header('WWW-Authenticate: Bearer resource_metadata="' . $base . '/.well-known/oauth-protected-resource", scope="mail.read"');
+            $this->oauth_challenge(false);
             $this->json_out(401, ['jsonrpc' => '2.0', 'id' => null, 'error' => [
                 'code' => -32001,
                 'message' => 'Missing bearer token. Use MCP OAuth authorization with PKCE.',
@@ -152,7 +151,7 @@ class mcpcube extends rcube_plugin
             $ctx = mcpcube_auth_context::from_bearer_token($token);
         } catch (mcpcube_auth_error $e) {
             if ($e->httpStatus === 401) {
-                header('WWW-Authenticate: Bearer error="invalid_token"');
+                $this->oauth_challenge(true);
             }
             $this->json_out($e->httpStatus, ['jsonrpc' => '2.0', 'id' => null, 'error' => ['code' => -32001, 'message' => $e->getMessage()]]);
         }
@@ -185,6 +184,18 @@ class mcpcube extends rcube_plugin
 
         $ctx->close();
         $this->json_out(200, $response);
+    }
+
+    private function oauth_challenge(bool $invalid): void
+    {
+        $base = rtrim((string) rcmail::get_instance()->config->get('mcpcube_public_url', ''), '/');
+        $metadata = 'resource_metadata="' . $base . '/.well-known/oauth-protected-resource"';
+        if ($invalid) {
+            header('WWW-Authenticate: Bearer error="invalid_token", ' . $metadata);
+            return;
+        }
+
+        header('WWW-Authenticate: Bearer ' . $metadata . ', scope="mail.read"');
     }
 
     private function validate_origin(): void
@@ -285,8 +296,10 @@ class mcpcube extends rcube_plugin
               listFolders(): [{name, unread, total, delimiter}]
               listMessages(folder = 'INBOX', limit = 100, offset = 0): [{uid, folder, subject, from, to, date, size, seen, flagged, answered}], newest first
               getMessage(uid, folder = 'INBOX'): {uid, folder, subject, from, to, cc, date, message_id, body_text, attachments: [{filename, mimetype, size, part_id}]}
+              getAttachment(uid, partId, folder = 'INBOX'): {filename, mimetype, size, part_id, content_base64}. partId comes from getMessage attachments. Pass this array into sendMessage; do not return a large content_base64 from the script.
               searchMessages(query, folder = 'INBOX', limit = 50): same shape as listMessages
-              sendMessage(['to' => ..., 'subject' => ..., 'cc' => ?, 'bcc' => ?, 'body_text' => ?, 'body_html' => ?, 'in_reply_to' => ?, 'references' => ?]): {status, to, subject, message_id}
+              sendMessage(['to' => ..., 'subject' => ..., 'cc' => ?, 'bcc' => ?, 'body_text' => ?, 'body_html' => ?, 'in_reply_to' => ?, 'references' => ?, 'reply_uid' => ?, 'reply_folder' => ?, 'attachments' => ?]): {status, to, subject, message_id, saved, saved_to?, warning?, answered?, answered_uid?, answered_folder?}. attachments is a list of {filename, mimetype, content_base64}, such as the array returned by getAttachment. A successful send normally has saved:true and saved_to:'Sent'. If SMTP succeeds but the IMAP copy fails, status remains 'sent', saved is false, and warning says not to resend. A reply must pass reply_uid and reply_folder from getMessage, plus in_reply_to set to that message's message_id. After SMTP accepts the reply, the original message is stored with the IMAP \Answered flag so mail clients show it as answered. If reply_uid is omitted, the original is looked up by in_reply_to. answered is true when that flag was stored.
+              forwardMessage(uid, folder, to, bodyText = null, subject = null): copies that message, including every attachment, to "to". Returns the sendMessage result plus forwarded_uid, attachments (count), and forwarded. Use this to forward an invoice PDF. Files stay on the server; the script does not handle the bytes. After SMTP accepts the forward, the original message is stored with the IMAP $Forwarded flag so mail clients show it as forwarded.
               moveMessage(uid, folder, targetFolder): {status, uid, from, to}
               flagMessage(uid, folder, flag, set = true): flag is one of SEEN|FLAGGED|ANSWERED|DRAFT
               createFolder(name, parent = null): {status, name}

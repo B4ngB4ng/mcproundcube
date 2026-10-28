@@ -11,9 +11,9 @@ $config = [];
 $config['mcpcube_encryption_key'] = 'REPLACE_WITH_BASE64_32_BYTE_KEY';
 
 // How long an approved agent's bearer token stays valid before the user must
-// re-pair. Default 30 days, per RFC 8628 this is independent of the short
+// re-pair. Default 90 days, per RFC 8628 this is independent of the short
 // device_code/user_code TTL below.
-$config['mcpcube_token_ttl'] = 30 * 86400;
+$config['mcpcube_token_ttl'] = 90 * 86400;
 
 // How long an unclaimed device_code / user_code pair stays valid while the
 // agent is showing the user the login link and waiting for approval.
@@ -66,4 +66,6 @@ $config['mcpcube_rate_limit_window'] = 60;
 // the user opens the approval link.
 $config['mcpcube_ratelimit_cache'] = 'db';
 $config['mcpcube_ratelimit_cache_ttl'] = $config['mcpcube_rate_limit_window'];
+// Lifetime of an OAuth access token. Clients renew it with the refresh
+// token, which stays valid until the agent expires (mcpcube_token_ttl).
 $config['mcpcube_oauth_access_ttl'] = 3600;

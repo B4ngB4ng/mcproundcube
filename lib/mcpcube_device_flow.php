@@ -22,7 +22,7 @@ declare(strict_types=1);
  *   4. The agent, meanwhile, has been polling device_token() every
  *      `interval` seconds. Once approved, it receives the bearer token
  *      exactly once and uses it as `Authorization: Bearer <token>` for every
- *      subsequent MCP call, for up to mcpcube_token_ttl (default 30 days).
+ *      subsequent MCP call, for up to mcpcube_token_ttl (default 90 days).
  */
 final class mcpcube_device_flow
 {
@@ -94,12 +94,11 @@ final class mcpcube_device_flow
         $result = $db->query(
             "INSERT INTO {$table} (`device_code`, `user_code`, `client_label`, `requested_scopes`,"
                 . ' `status`, `created`, `expires`, `poll_interval`)'
-                . ' VALUES (?, ?, ?, ?, ' . $db->quote('pending') . ', ' . $db->now() . ', ?, ?)',
+                . ' VALUES (?, ?, ?, ?, ' . $db->quote('pending') . ', ' . $db->now() . ', ' . $db->now($ttl) . ', ?)',
             $deviceCode,
             $userCode,
             $label,
             implode(',', $scopes),
-            gmdate('Y-m-d H:i:s', time() + $ttl),
             $interval
         );
 
@@ -197,7 +196,7 @@ final class mcpcube_device_flow
                 self::json_response(200, [
                     'access_token' => $rawToken,
                     'token_type' => 'Bearer',
-                    'expires_in' => max(60, (int) $rcmail->config->get('mcpcube_token_ttl', 30 * 86400)),
+                    'expires_in' => max(60, (int) $rcmail->config->get('mcpcube_token_ttl', 90 * 86400)),
                     'scope' => str_replace(',', ' ', (string) $row['requested_scopes']),
                 ]);
                 // no break
@@ -262,6 +261,9 @@ final class mcpcube_device_flow
         if ($decision === 'deny') {
             $db->query("UPDATE {$table} SET `status` = " . $db->quote('denied')
                 . ' WHERE `id` = ? AND `status` = ' . $db->quote('pending'), $row['id']);
+            if ($this->redirect_oauth_client($row, ['error' => 'access_denied'])) {
+                return;
+            }
             $rcmail->output->show_message('Denied. The agent will not be given access.', 'confirmation');
             $this->render_done('Access denied. You can close this window.');
             return;
@@ -280,19 +282,48 @@ final class mcpcube_device_flow
             return;
         }
 
-        if ($oauthCode !== null) {
-            $db = $rcmail->get_dbh();
-            $oauthTable = $db->table_name('mcpcube_oauth_requests', true);
-            $requestResult = $db->query("SELECT * FROM {$oauthTable} WHERE `request_id` = ?", $row['oauth_request_id']);
-            $request = $db->fetch_assoc($requestResult);
-            if (is_array($request) && filter_var($request['redirect_uri'], FILTER_VALIDATE_URL)) {
-                $location = (string) $request['redirect_uri'] . '?' . http_build_query(['code' => $oauthCode, 'state' => $request['state']]);
-                header('Location: ' . $location);
-                exit;
-            }
+        if (is_string($oauthCode) && $oauthCode !== '') {
+            $this->redirect_oauth_client($row, ['code' => $oauthCode]);
+            $this->render_done('Approved, but the client redirect URI was missing. Return to Cursor and try connecting again.');
+            return;
         }
 
         $this->render_done('Approved. You can return to your agent - it will finish connecting automatically within a few seconds.');
+    }
+
+    /**
+     * Send the browser back to the MCP client's redirect_uri with an
+     * authorization code (or OAuth error). Returns false when this pairing
+     * is device-flow only and has no client callback.
+     *
+     * @param array<string, mixed> $row
+     * @param array<string, scalar|null> $params
+     */
+    private function redirect_oauth_client(array $row, array $params): bool
+    {
+        $requestId = trim((string) ($row['oauth_request_id'] ?? ''));
+        if ($requestId === '') {
+            return false;
+        }
+
+        $db = rcmail::get_instance()->get_dbh();
+        $oauthTable = $db->table_name('mcpcube_oauth_requests', true);
+        $requestResult = $db->query("SELECT * FROM {$oauthTable} WHERE `request_id` = ?", $requestId);
+        $request = $db->is_error($requestResult) ? null : $db->fetch_assoc($requestResult);
+        if (!is_array($request)) {
+            return false;
+        }
+
+        $redirect = (string) $request['redirect_uri'];
+        if ($redirect === '' || !mcpcube_oauth::valid_redirect($redirect)) {
+            return false;
+        }
+
+        if (!array_key_exists('state', $params)) {
+            $params['state'] = (string) $request['state'];
+        }
+
+        mcpcube_oauth::redirect_to_client($redirect, $params);
     }
 
     /** @param array<string, mixed> $row */
@@ -346,21 +377,20 @@ final class mcpcube_device_flow
             $encryptedPassword = mcpcube_crypto::encrypt_secret($password, 'imap-password:' . $credentialKey, $key);
             $rawToken = mcpcube_crypto::random_bearer_token();
             $tokenHash = mcpcube_crypto::hash_token($rawToken);
-            $ttl = max(60, (int) $rcmail->config->get('mcpcube_token_ttl', 30 * 86400));
+            $ttl = max(60, (int) $rcmail->config->get('mcpcube_token_ttl', 90 * 86400));
             $host = is_string($_SESSION['storage_host'] ?? null) ? $_SESSION['storage_host'] : null;
 
             $insertResult = $db->query(
                 "INSERT INTO {$agentsTable} (`user_id`, `credential_key`, `token_hash`, `encrypted_password`,"
                     . ' `imap_host`, `label`, `scopes`, `created`, `expires`)'
-                    . ' VALUES (?, ?, ?, ?, ?, ?, ?, ' . $db->now() . ', ?)',
+                    . ' VALUES (?, ?, ?, ?, ?, ?, ?, ' . $db->now() . ', ' . $db->now($ttl) . ')',
                 $userId,
                 $credentialKey,
                 $tokenHash,
                 $encryptedPassword,
                 $host,
                 (string) $row['client_label'],
-                (string) $row['requested_scopes'],
-                gmdate('Y-m-d H:i:s', time() + $ttl)
+                (string) $row['requested_scopes']
             );
 
             if ($db->is_error($insertResult)) {
@@ -391,9 +421,19 @@ final class mcpcube_device_flow
                 $oauthCode = rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
                 $codeTable = $db->table_name('mcpcube_oauth_codes', true);
                 $ciphertext = mcpcube_crypto::encrypt_secret($rawToken, 'oauth-access:' . $row['oauth_request_id'], $key);
-                $codeInsert = $db->query("INSERT INTO {$codeTable} (`code_hash`,`request_id`,`client_id`,`redirect_uri`,`code_challenge`,`scope`,`access_ciphertext`,`access_expires`,`expires`,`used`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
-                    hash('sha256', $oauthCode), $row['oauth_request_id'], $request['client_id'], $request['redirect_uri'], $request['code_challenge'], $request['scope'], $ciphertext,
-                    max(60, (int) $rcmail->config->get('mcpcube_oauth_access_ttl', 3600)), gmdate('Y-m-d H:i:s', time() + 60));
+                $codeTtl = max(60, (int) $rcmail->config->get('mcpcube_oauth_code_ttl', 600));
+                $codeInsert = $db->query(
+                    "INSERT INTO {$codeTable} (`code_hash`,`request_id`,`client_id`,`redirect_uri`,`code_challenge`,`scope`,`access_ciphertext`,`access_expires`,`expires`,`used`)"
+                        . ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ' . $db->now($codeTtl) . ', 0)',
+                    hash('sha256', $oauthCode),
+                    $row['oauth_request_id'],
+                    $request['client_id'],
+                    $request['redirect_uri'],
+                    $request['code_challenge'],
+                    $request['scope'],
+                    $ciphertext,
+                    max(60, (int) $rcmail->config->get('mcpcube_oauth_access_ttl', 90 * 86400))
+                );
                 if ($db->is_error($codeInsert)) {
                     throw new RuntimeException('Could not store the OAuth authorization code');
                 }

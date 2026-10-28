@@ -44,24 +44,35 @@ final class mcpcube_auth_context
 
     public static function from_bearer_token(string $token): self
     {
-        if (!str_starts_with($token, 'mcpcube_pat_') || strlen($token) > 200) {
+        if (strlen($token) > 200) {
             throw new mcpcube_auth_error('invalid_token', 'Malformed bearer token');
         }
 
-        $tokenHash = mcpcube_crypto::hash_token($token);
+        if (str_starts_with($token, 'mcpcube_at_')) {
+            $row = self::row_for_access_token($token);
+        } elseif (str_starts_with($token, 'mcpcube_pat_')) {
+            $row = self::row_for_pat($token);
+        } else {
+            throw new mcpcube_auth_error('invalid_token', 'Malformed bearer token');
+        }
+
+        return self::open_agent_session($row);
+    }
+
+    /** @return array<string, mixed> */
+    private static function row_for_pat(string $token): array
+    {
         $rcmail = rcmail::get_instance();
         $db = $rcmail->get_dbh();
         $agents = $db->table_name('mcpcube_agents', true);
         $users = $db->table_name('users', true);
-
         $result = $db->query(
             "SELECT a.`id`, a.`user_id`, a.`credential_key`, a.`encrypted_password`, a.`imap_host`,"
-                . ' a.`label`, a.`scopes`, a.`expires`, a.`revoked`, u.`username`'
+                . ' a.`label`, a.`scopes`, a.`expires`, a.`revoked`, a.`token_hash`, u.`username`'
                 . " FROM {$agents} a JOIN {$users} u ON (u.`user_id` = a.`user_id`)"
                 . ' WHERE a.`token_hash` = ?',
-            $tokenHash
+            mcpcube_crypto::hash_token($token)
         );
-
         if ($db->is_error($result)) {
             throw new mcpcube_auth_error('server_error', 'Agent lookup failed', 500);
         }
@@ -70,15 +81,49 @@ final class mcpcube_auth_context
         if (!is_array($row)) {
             throw new mcpcube_auth_error('invalid_token', 'This bearer token is not recognized. It may have been revoked; ask the user for a new login link.');
         }
-
         if ($row['revoked'] !== null) {
             throw new mcpcube_auth_error('invalid_token', 'This agent has been revoked by the user.');
         }
-
         if (strtotime((string) $row['expires']) < time()) {
-            throw new mcpcube_auth_error('invalid_token', 'This agent\'s 30-day authorization has expired. Ask the user for a new login link.');
+            throw new mcpcube_auth_error('invalid_token', 'This agent\'s authorization has expired. Ask the user for a new login link.');
         }
 
+        return $row;
+    }
+
+    /** @return array<string, mixed> */
+    private static function row_for_access_token(string $token): array
+    {
+        $db = rcmail::get_instance()->get_dbh();
+        $tokens = $db->table_name('mcpcube_oauth_tokens', true);
+        $agents = $db->table_name('mcpcube_agents', true);
+        $users = $db->table_name('users', true);
+        $result = $db->query(
+            "SELECT a.`id`, a.`user_id`, a.`credential_key`, a.`encrypted_password`, a.`imap_host`,"
+                . ' a.`label`, t.`scope` AS `scopes`, a.`expires`, a.`revoked`, a.`token_hash`, u.`username`'
+                . " FROM {$tokens} t"
+                . " JOIN {$agents} a ON a.`id` = t.`agent_id`"
+                . " JOIN {$users} u ON u.`user_id` = a.`user_id`"
+                . ' WHERE t.`access_hash` = ? AND t.`revoked` IS NULL AND t.`access_expires` > ' . $db->now()
+                . ' AND a.`revoked` IS NULL AND a.`expires` > ' . $db->now(),
+            mcpcube_crypto::hash_token($token)
+        );
+        if ($db->is_error($result)) {
+            throw new mcpcube_auth_error('server_error', 'Agent lookup failed', 500);
+        }
+
+        $row = $db->fetch_assoc($result);
+        if (!is_array($row)) {
+            throw new mcpcube_auth_error('invalid_token', 'This access token is not recognized or has expired. Refresh it, or ask the user to sign in again.');
+        }
+
+        return $row;
+    }
+
+    /** @param array<string, mixed> $row */
+    private static function open_agent_session(array $row): self
+    {
+        $rcmail = rcmail::get_instance();
         $password = mcpcube_crypto::decrypt_secret(
             (string) $row['encrypted_password'],
             'imap-password:' . $row['credential_key'],
@@ -102,7 +147,7 @@ final class mcpcube_auth_context
             throw new mcpcube_auth_error('imap_auth_failed', 'The stored mailbox credential was rejected by the mail server. Ask the user to revoke and re-pair this agent from Settings.', 502);
         }
 
-        self::touch_last_used($db, (int) $row['id']);
+        self::touch_last_used($rcmail->get_dbh(), (int) $row['id']);
 
         $scopes = array_values(array_filter(array_map('trim', explode(',', (string) $row['scopes']))));
 
@@ -111,7 +156,7 @@ final class mcpcube_auth_context
             (int) $row['id'],
             (int) $row['user_id'],
             (string) $row['credential_key'],
-            $tokenHash,
+            (string) $row['token_hash'],
             (string) $row['label'],
             $scopes,
             $originalSession

@@ -49,3 +49,22 @@ CREATE TABLE `mcpcube_device_codes` (
 CREATE TABLE `mcpcube_oauth_clients` (`client_id` varchar(80) NOT NULL PRIMARY KEY, `client_name` varchar(120) NOT NULL, `redirect_uris` text NOT NULL, `created` datetime NOT NULL);
 CREATE TABLE `mcpcube_oauth_requests` (`request_id` char(48) NOT NULL PRIMARY KEY, `client_id` varchar(80) NOT NULL, `redirect_uri` text NOT NULL, `state` text NOT NULL, `code_challenge` char(43) NOT NULL, `scope` varchar(255) NOT NULL, `resource` text NOT NULL, `created` datetime NOT NULL, `expires` datetime NOT NULL);
 CREATE TABLE `mcpcube_oauth_codes` (`id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, `code_hash` char(64) NOT NULL UNIQUE, `request_id` char(48) NOT NULL, `client_id` varchar(80) NOT NULL, `redirect_uri` text NOT NULL, `code_challenge` char(43) NOT NULL, `scope` varchar(255) NOT NULL, `access_ciphertext` text NOT NULL, `access_expires` int NOT NULL, `expires` datetime NOT NULL, `used` tinyint NOT NULL DEFAULT 0);
+CREATE TABLE `mcpcube_oauth_tokens` (
+    `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+    `family_id` char(32) NOT NULL,
+    `agent_id` int(10) UNSIGNED NOT NULL,
+    `client_id` varchar(80) NOT NULL,
+    `access_hash` char(64) NOT NULL,
+    `refresh_hash` char(64) NOT NULL,
+    `scope` varchar(255) NOT NULL,
+    `access_expires` datetime NOT NULL,
+    `refresh_expires` datetime NOT NULL,
+    `created` datetime NOT NULL,
+    `rotated` datetime DEFAULT NULL,
+    `revoked` datetime DEFAULT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `access_hash` (`access_hash`),
+    UNIQUE KEY `refresh_hash` (`refresh_hash`),
+    KEY `family_id` (`family_id`),
+    KEY `agent_id` (`agent_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
